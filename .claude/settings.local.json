@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/**)"
+    ],
+    "additionalDirectories": [
+      "f:\\99. U\\Semestre 19\\Arquitectura de software\\Projeto\\Conversatory\\conversation-chat\\internal\\db"
+    ]
+  }
+}
