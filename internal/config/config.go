@@ -19,6 +19,7 @@ type Config struct {
 	TenantServiceURL string
 	AuthServiceURL   string
 	OpenAIAPIKey     string
+	OpenAIBaseURL    string
 	DefaultIdleTimeoutSeconds int
 	AuthStub       bool
 	AuthStubClaims StubClaims

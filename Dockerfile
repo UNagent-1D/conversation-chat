@@ -12,6 +12,8 @@ RUN go build -o bin/conversation-chat ./cmd/server/main.go
 # Run stage
 FROM alpine:3.20
 
+RUN apk add --no-cache ca-certificates
+
 WORKDIR /app
 
 COPY --from=builder /app/bin/conversation-chat .
