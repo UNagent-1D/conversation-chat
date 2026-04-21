@@ -49,6 +49,7 @@ func Load() *Config {
 		TenantServiceURL:         getEnv("TENANT_SERVICE_URL", "http://localhost:8080"),
 		AuthServiceURL:           getEnv("AUTH_SERVICE_URL", "http://localhost:9090"),
 		OpenAIAPIKey:             getEnv("OPENAI_API_KEY", ""),
+		OpenAIBaseURL:            getEnv("OPENAI_BASE_URL", ""),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
 		AuthStub:                 getBool("AUTH_STUB", false),
 		AuthStubClaims: StubClaims{

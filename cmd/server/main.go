@@ -56,7 +56,7 @@ func main() {
 
 	acrClient := clients.NewACRClient(cfg.ACRServiceURL, internalToken)
 	tenantClient := clients.NewTenantClient(cfg.TenantServiceURL, internalToken)
-	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey)
+	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
 
 	// ── Services ───────────────────────────────────────────────────────────────
 	entrypointSvc := service.NewEntrypointService(

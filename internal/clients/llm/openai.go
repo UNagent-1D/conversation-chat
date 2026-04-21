@@ -41,9 +41,14 @@ type OpenAIClient struct {
 	client *openai.Client
 }
 
-// NewOpenAIClient creates a new OpenAIClient with the given API key.
-func NewOpenAIClient(apiKey string) *OpenAIClient {
-	return &OpenAIClient{client: openai.NewClient(apiKey)}
+// NewOpenAIClient creates a new OpenAIClient with the given API key and optional base URL.
+// If baseURL is non-empty it overrides the default api.openai.com endpoint (e.g. for OpenRouter).
+func NewOpenAIClient(apiKey, baseURL string) *OpenAIClient {
+	cfg := openai.DefaultConfig(apiKey)
+	if baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
+	return &OpenAIClient{client: openai.NewClientWithConfig(cfg)}
 }
 
 // Complete sends a completion request and parses the structured JSON response.
