@@ -48,8 +48,8 @@ func Load() *Config {
 		ACRServiceURL:            getEnv("ACR_SERVICE_URL", "http://localhost:8081"),
 		TenantServiceURL:         getEnv("TENANT_SERVICE_URL", "http://localhost:8080"),
 		AuthServiceURL:           getEnv("AUTH_SERVICE_URL", "http://localhost:9090"),
-		OpenAIAPIKey:             getEnv("OPENAI_API_KEY", ""),
-		OpenAIBaseURL:            getEnv("OPENAI_BASE_URL", ""),
+		OpenAIAPIKey:             requireEnv("OPENAI_API_KEY"),
+		OpenAIBaseURL:            requireEnv("OPENAI_BASE_URL"),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
 		AuthStub:                 getBool("AUTH_STUB", false),
 		AuthStubClaims: StubClaims{
@@ -67,6 +67,17 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// requireEnv reads a non-empty env var or aborts startup. Used for credentials
+// and endpoints that have no safe in-code default — callers should always
+// inject these explicitly (umbrella .env / docker compose).
+func requireEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("required environment variable %s is not set", key)
+	}
+	return v
 }
 
 func getBool(key string, fallback bool) bool {
