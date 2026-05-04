@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/UNagent-1D/conversation-chat/internal/apperrors"
 	"github.com/UNagent-1D/conversation-chat/internal/clients/llm"
 	"github.com/UNagent-1D/conversation-chat/internal/domain"
 	"github.com/UNagent-1D/conversation-chat/internal/repository"
@@ -137,6 +139,11 @@ func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelop
 	for i := 0; i < maxToolIterations; i++ {
 		llmResp, rawContent, err := s.callLLM(ctx, env, history)
 		if err != nil {
+			if errors.Is(err, apperrors.ErrLLMCircuitOpen) {
+				// Circuit is open — provider is unavailable, fail fast with a
+				// distinct message so the user knows to retry later.
+				return "El servicio de IA no está disponible en este momento. Por favor intenta en unos minutos.", nil
+			}
 			return "Lo siento, ocurrió un error. Por favor intenta de nuevo.", nil
 		}
 

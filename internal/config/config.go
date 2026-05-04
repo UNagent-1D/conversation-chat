@@ -4,26 +4,28 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	ServerPort    string
-	AppVersion    string
-	GinMode       string
-	RedisURL      string
-	MongoURI      string
-	MongoDB       string
-	ACRServiceURL string
-	TenantServiceURL string
-	AuthServiceURL   string
-	OpenAIAPIKey     string
-	OpenAIBaseURL    string
+	ServerPort               string
+	AppVersion               string
+	GinMode                  string
+	RedisURL                 string
+	MongoURI                 string
+	MongoDB                  string
+	ACRServiceURL            string
+	TenantServiceURL         string
+	AuthServiceURL           string
+	OpenAIAPIKey             string
+	OpenAIBaseURL            string
 	DefaultIdleTimeoutSeconds int
-	AuthStub       bool
-	AuthStubClaims StubClaims
-	RabbitmqURL    string
+	AuthStub                 bool
+	AuthStubClaims           StubClaims
+	RabbitmqURL              string
+	LLMCircuitBreaker        LLMCircuitBreakerConfig
 }
 
 type StubClaims struct {
@@ -32,6 +34,30 @@ type StubClaims struct {
 	TenantID   string
 	TenantSlug string
 	Email      string
+}
+
+// LLMCircuitBreakerConfig holds the tuning knobs for the LLM circuit breaker.
+//
+// Defaults are sized conservatively for a multi-step tool chain where a
+// single conversation turn may trigger up to 5 LLM round-trips, each
+// potentially taking 20–40 s with a large remote model:
+//
+//   - FailureThreshold=5  — requires 5 consecutive provider errors before
+//     opening; a single slow-but-valid chain does not trip the breaker.
+//   - Interval=120s       — the rolling window for the failure counter; wider
+//     than the worst-case turn duration so stale counts don't accumulate
+//     across sequential turns.
+//   - OpenTimeout=60s     — how long the breaker stays open (fail-fast) before
+//     allowing one probe request to check for provider recovery.
+//   - MaxHalfOpenRequests=1 — only one probe at a time; prevents thundering
+//     herd on recovery.
+//
+// Override via environment variables when tuning for a different model or SLA.
+type LLMCircuitBreakerConfig struct {
+	FailureThreshold    int
+	Interval            time.Duration
+	OpenTimeout         time.Duration
+	MaxHalfOpenRequests int
 }
 
 func Load() *Config {
@@ -52,8 +78,15 @@ func Load() *Config {
 		OpenAIAPIKey:             requireEnv("OPENAI_API_KEY"),
 		OpenAIBaseURL:            requireEnv("OPENAI_BASE_URL"),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
-		AuthStub:                 getBool("AUTH_STUB", false),
-		RabbitmqURL:              getEnv("RABBITMQ_URL", ""),
+		AuthStub:    getBool("AUTH_STUB", false),
+		RabbitmqURL: getEnv("RABBITMQ_URL", ""),
+		LLMCircuitBreaker: LLMCircuitBreakerConfig{
+			// See LLMCircuitBreakerConfig doc for why these defaults are wide.
+			FailureThreshold:    getInt("LLM_CB_FAILURE_THRESHOLD", 5),
+			Interval:            getDuration("LLM_CB_INTERVAL_SECONDS", 120) * time.Second,
+			OpenTimeout:         getDuration("LLM_CB_OPEN_TIMEOUT_SECONDS", 60) * time.Second,
+			MaxHalfOpenRequests: getInt("LLM_CB_MAX_HALF_OPEN_REQUESTS", 1),
+		},
 		AuthStubClaims: StubClaims{
 			UserID:     getEnv("AUTH_STUB_USER_ID", "00000000-0000-0000-0000-000000000001"),
 			Role:       getEnv("AUTH_STUB_ROLE", "app_admin"),
@@ -104,4 +137,11 @@ func getInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// getDuration reads an integer env var and returns it as a time.Duration.
+// The caller is responsible for multiplying by the appropriate unit
+// (e.g., * time.Second).
+func getDuration(key string, fallbackSeconds int) time.Duration {
+	return time.Duration(getInt(key, fallbackSeconds))
 }

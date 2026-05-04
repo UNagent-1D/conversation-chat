@@ -57,7 +57,14 @@ func main() {
 
 	acrClient := clients.NewACRClient(cfg.ACRServiceURL, internalToken)
 	tenantClient := clients.NewTenantClient(cfg.TenantServiceURL, internalToken)
-	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
+
+	rawLLMClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
+	llmClient := llm.NewCircuitBreakerClient(rawLLMClient, llm.CircuitBreakerConfig{
+		FailureThreshold:    cfg.LLMCircuitBreaker.FailureThreshold,
+		Interval:            cfg.LLMCircuitBreaker.Interval,
+		OpenTimeout:         cfg.LLMCircuitBreaker.OpenTimeout,
+		MaxHalfOpenRequests: cfg.LLMCircuitBreaker.MaxHalfOpenRequests,
+	}, logger)
 
 	// ── Services ───────────────────────────────────────────────────────────────
 	entrypointSvc := service.NewEntrypointService(
