@@ -15,6 +15,7 @@ import (
 	"github.com/UNagent-1D/conversation-chat/internal/repository"
 	"github.com/UNagent-1D/conversation-chat/internal/router"
 	"github.com/UNagent-1D/conversation-chat/internal/service"
+	"github.com/UNagent-1D/conversation-chat/internal/worker"
 )
 
 func main() {
@@ -104,6 +105,18 @@ func main() {
 			TenantSlug: stubSlugPtr,
 			Email:      cfg.AuthStubClaims.Email,
 		},
+	}
+
+	// ── Async worker (RabbitMQ consumer) ──────────────────────────────────────
+	if cfg.RabbitmqURL != "" {
+		w := worker.New(chatSvc, cfg.RabbitmqURL, logger)
+		go func() {
+			if err := w.Start(ctx); err != nil {
+				logger.Error("worker stopped", slog.String("error", err.Error()))
+			}
+		}()
+	} else {
+		logger.Warn("RABBITMQ_URL not set — async worker disabled")
 	}
 
 	// ── Start server ───────────────────────────────────────────────────────────

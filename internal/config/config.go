@@ -23,6 +23,7 @@ type Config struct {
 	DefaultIdleTimeoutSeconds int
 	AuthStub       bool
 	AuthStubClaims StubClaims
+	RabbitmqURL    string
 }
 
 type StubClaims struct {
@@ -52,6 +53,7 @@ func Load() *Config {
 		OpenAIBaseURL:            requireEnv("OPENAI_BASE_URL"),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
 		AuthStub:                 getBool("AUTH_STUB", false),
+		RabbitmqURL:              getEnv("RABBITMQ_URL", ""),
 		AuthStubClaims: StubClaims{
 			UserID:     getEnv("AUTH_STUB_USER_ID", "00000000-0000-0000-0000-000000000001"),
 			Role:       getEnv("AUTH_STUB_ROLE", "app_admin"),
