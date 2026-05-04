@@ -6,13 +6,18 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("not found")
-	ErrConflict     = errors.New("conflict")
-	ErrForbidden    = errors.New("forbidden")
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrValidation   = errors.New("validation error")
-	ErrInternal     = errors.New("internal server error")
+	ErrNotFound      = errors.New("not found")
+	ErrConflict      = errors.New("conflict")
+	ErrForbidden     = errors.New("forbidden")
+	ErrUnauthorized  = errors.New("unauthorized")
+	ErrValidation    = errors.New("validation error")
+	ErrInternal      = errors.New("internal server error")
 	ErrUnprocessable = errors.New("unprocessable entity")
+
+	// ErrLLMCircuitOpen is returned by CircuitBreakerClient when the breaker
+	// is in the Open state. Callers should surface a "service unavailable"
+	// message to the user rather than a generic error.
+	ErrLLMCircuitOpen = errors.New("llm circuit open")
 )
 
 // HTTPStatus maps a sentinel error to its corresponding HTTP status code.
