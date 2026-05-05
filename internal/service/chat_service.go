@@ -288,6 +288,9 @@ func (s *ChatService) executeTool(ctx context.Context, env *domain.ContextEnvelo
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Internal bearer for tool data sources that gate on AUTH_STUB (e.g.
+	// email-send). Hospital-mock ignores auth so this is harmless there.
+	req.Header.Set("Authorization", "Bearer internal")
 
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
