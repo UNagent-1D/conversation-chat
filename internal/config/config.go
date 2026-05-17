@@ -26,6 +26,8 @@ type Config struct {
 	AuthStubClaims           StubClaims
 	RabbitmqURL              string
 	LLMCircuitBreaker        LLMCircuitBreakerConfig
+	BackendChannelKey        string
+	BackendChannelEnabled    bool
 }
 
 type StubClaims struct {
@@ -78,8 +80,10 @@ func Load() *Config {
 		OpenAIAPIKey:             requireEnv("OPENAI_API_KEY"),
 		OpenAIBaseURL:            requireEnv("OPENAI_BASE_URL"),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
-		AuthStub:    getBool("AUTH_STUB", false),
-		RabbitmqURL: getEnv("RABBITMQ_URL", ""),
+		AuthStub:              getBool("AUTH_STUB", false),
+		RabbitmqURL:           getEnv("RABBITMQ_URL", ""),
+		BackendChannelKey:     getEnv("BACKEND_CHANNEL_KEY", ""),
+		BackendChannelEnabled: getBool("BACKEND_CHANNEL_ENABLED", false),
 		LLMCircuitBreaker: LLMCircuitBreakerConfig{
 			// See LLMCircuitBreakerConfig doc for why these defaults are wide.
 			FailureThreshold:    getInt("LLM_CB_FAILURE_THRESHOLD", 5),

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/domain"
 )
 
@@ -148,26 +148,21 @@ func BuildRouteConfigs(sources []*DataSource) map[string]domain.RouteConfig {
 }
 
 // doGet is a generic helper that sends an authenticated GET and unmarshals the response.
+// Routes through the secure channel — outbound headers + inbound body
+// decryption are handled by channel.Do.
 func doGet[T any](ctx context.Context, client *http.Client, endpoint, token string) (*T, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
+	body, status, err := channel.Do(ctx, client, channel.Request{
+		Method: http.MethodGet,
+		URL:    endpoint,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + token,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d: %s", status, string(body))
 	}
 
 	var result T

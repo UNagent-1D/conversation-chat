@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/domain"
 )
 
@@ -61,32 +61,29 @@ func NewACRClient(baseURL, token string) *ACRClient {
 
 // GetActiveConfig fetches the active agent config for a tenant profile.
 // Calls: GET /api/v1/tenants/:id/profiles/:pid/configs/active
+//
+// Outbound body is empty (GET), but the response is run through the secure
+// channel: if the upstream replies in envelope form (Content-Type:
+// application/vnd.unagent.secure+json), the helper decrypts before
+// unmarshalling.
 func (c *ACRClient) GetActiveConfig(ctx context.Context, tenantID, profileID string) (*ACRConfig, error) {
 	url := fmt.Sprintf("%s/api/v1/tenants/%s/profiles/%s/configs/active", c.baseURL, tenantID, profileID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build acr request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	body, status, err := channel.Do(ctx, c.httpClient, channel.Request{
+		Method: http.MethodGet,
+		URL:    url,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + c.token,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("acr request: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read acr response: %w", err)
-	}
-
-	if resp.StatusCode == http.StatusNotFound {
+	if status == http.StatusNotFound {
 		return nil, fmt.Errorf("no active config for profile %s", profileID)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("acr returned %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("acr returned %d: %s", status, string(body))
 	}
 
 	var cfg ACRConfig

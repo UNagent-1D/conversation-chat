@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/UNagent-1D/conversation-chat/internal/apperrors"
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/clients/llm"
 	"github.com/UNagent-1D/conversation-chat/internal/domain"
 	"github.com/UNagent-1D/conversation-chat/internal/repository"
@@ -255,6 +255,9 @@ func (s *ChatService) callLLM(ctx context.Context, env *domain.ContextEnvelope, 
 }
 
 // executeTool calls the external data source HTTP endpoint for a tool.
+// Routes through the secure channel: the request body (parsed JSON, not the
+// raw RawMessage) is sealed when the channel is active, and the response is
+// decrypted before being handed back to the LLM.
 func (s *ChatService) executeTool(ctx context.Context, env *domain.ContextEnvelope, tool *domain.ToolCall) (json.RawMessage, error) {
 	route, ok := env.TenantPolicy.RouteConfigs[tool.ToolName]
 	if !ok {
@@ -276,41 +279,45 @@ func (s *ChatService) executeTool(ctx context.Context, env *domain.ContextEnvelo
 
 	targetURL := route.BaseURL + path
 
-	var bodyReader io.Reader
+	// Decode parameters into a typed value so channel.Do can re-marshal +
+	// seal them. POST/PATCH/PUT carry the params as a body; GET does not.
+	var reqBody any
 	if route.Method == "POST" || route.Method == "PATCH" || route.Method == "PUT" {
-		bodyReader = strings.NewReader(string(tool.Parameters))
+		var parsed any
+		if len(tool.Parameters) > 0 {
+			if err := json.Unmarshal(tool.Parameters, &parsed); err != nil {
+				return nil, fmt.Errorf("parse tool params: %w", err)
+			}
+			reqBody = parsed
+		} else {
+			reqBody = map[string]any{}
+		}
 	}
-
-	req, err := http.NewRequestWithContext(ctx, route.Method, targetURL, bodyReader)
-	if err != nil {
-		return nil, fmt.Errorf("build tool request: %w", err)
-	}
-	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// Internal bearer for tool data sources that gate on AUTH_STUB (e.g.
-	// email-send). Hospital-mock ignores auth so this is harmless there.
-	req.Header.Set("Authorization", "Bearer internal")
 
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	body, status, err := channel.Do(ctx, http.DefaultClient, channel.Request{
+		Method: route.Method,
+		URL:    targetURL,
+		Body:   reqBody,
+		Headers: map[string]string{
+			// Internal bearer for tool data sources that gate on AUTH_STUB
+			// (e.g. email-send). Hospital-mock ignores auth so this is
+			// harmless there.
+			"Authorization": "Bearer internal",
+		},
+	})
 	elapsed := time.Since(start)
 
 	s.logger.Info("tool call",
 		slog.String("tool", tool.ToolName),
 		slog.String("method", route.Method),
 		slog.String("url", targetURL),
+		slog.Int("status", status),
 		slog.Int64("latency_ms", elapsed.Milliseconds()),
 	)
 
 	if err != nil {
 		return nil, fmt.Errorf("tool http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read tool response: %w", err)
 	}
 
 	return json.RawMessage(body), nil

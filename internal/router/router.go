@@ -3,6 +3,7 @@ package router
 import (
 	"log/slog"
 
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/handler"
 	"github.com/UNagent-1D/conversation-chat/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -26,11 +27,17 @@ func New(ginMode string, authCfg middleware.AuthConfig, logger *slog.Logger, h H
 
 	api := r.Group("/api/v1")
 
-	// ── Health (public) ──────────────────────────────────────────────────────
+	// ── Health (public, plaintext) ───────────────────────────────────────────
+	// Health probes don't share the channel key, so the secure-channel
+	// middleware must be mounted on the auth group only.
 	api.GET("/health", h.Health.Check)
 
 	// ── Authenticated routes ─────────────────────────────────────────────────
+	// Secure channel decrypts the body before auth so the bearer/claims are
+	// read from plaintext; the writer is wrapped so the response is sealed
+	// when the caller used the envelope on the way in.
 	auth := api.Group("")
+	auth.Use(channel.Middleware())
 	auth.Use(middleware.Auth(authCfg))
 
 	// ── Conversation / Entrypoint ────────────────────────────────────────────

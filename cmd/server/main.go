@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/clients"
 	"github.com/UNagent-1D/conversation-chat/internal/clients/llm"
 	"github.com/UNagent-1D/conversation-chat/internal/config"
@@ -24,6 +25,19 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+
+	// ── Secure channel (AES-256-GCM) ───────────────────────────────────────────
+	// Initialised once at startup so every outbound HTTP client, inbound
+	// middleware, and RabbitMQ worker can use the package-level Seal/Open
+	// without threading config through their constructors.
+	if err := channel.Init(cfg.BackendChannelKey, cfg.BackendChannelEnabled); err != nil {
+		log.Fatalf("secure channel init: %v", err)
+	}
+	if channel.Active() {
+		logger.Info("secure channel enabled (AES-256-GCM)")
+	} else {
+		logger.Info("secure channel disabled — backend traffic is plaintext")
+	}
 
 	ctx := context.Background()
 

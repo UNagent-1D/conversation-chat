@@ -9,6 +9,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/service"
 )
 
@@ -116,8 +117,22 @@ func (w *Worker) connect() (*amqp.Connection, *amqp.Channel, error) {
 }
 
 func (w *Worker) handleDelivery(ctx context.Context, ch *amqp.Channel, d amqp.Delivery) {
+	// Decrypt the AMQP body if agent-runtime sealed it. OpenBytes is a
+	// passthrough when the content-type is plaintext, so this stays
+	// compatible during the rollout window when BACKEND_CHANNEL_ENABLED
+	// might be false on either side.
+	plain, err := channel.OpenBytes(d.ContentType, d.Body)
+	if err != nil {
+		w.logger.Error("worker: failed to decrypt job envelope",
+			slog.String("error", err.Error()),
+			slog.String("content_type", d.ContentType),
+		)
+		_ = d.Nack(false, false)
+		return
+	}
+
 	var job ChatJob
-	if err := json.Unmarshal(d.Body, &job); err != nil {
+	if err := json.Unmarshal(plain, &job); err != nil {
 		w.logger.Error("worker: failed to parse job", slog.String("error", err.Error()))
 		_ = d.Nack(false, false)
 		return
@@ -153,9 +168,21 @@ func (w *Worker) handleDelivery(ctx context.Context, ch *amqp.Channel, d amqp.De
 		Text:      resultText,
 	}
 
-	body, _ := json.Marshal(result)
+	// Seal the result envelope so the agent-runtime consumer sees ciphertext
+	// in the chat_results queue. channel.SealJSON falls back to plaintext +
+	// application/json when the channel is disabled, keeping the contract
+	// during gradual rollout.
+	body, ct, _, err := channel.SealJSON(result)
+	if err != nil {
+		w.logger.Error("worker: failed to seal result envelope",
+			slog.String("job_id", job.JobID),
+			slog.String("error", err.Error()),
+		)
+		_ = d.Nack(false, false)
+		return
+	}
 	pub := amqp.Publishing{
-		ContentType:  "application/json",
+		ContentType:  ct,
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
 	}
