@@ -1,0 +1,74 @@
+name: Deploy
+
+# Per-repo deploy for conversation-chat.
+# Health path is /api/v1/health (Go/Gin) — not /health.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Target environment"
+        required: true
+        type: choice
+        default: dev
+        options: [dev, prod]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.env || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    name: Railway / dev
+    if: github.event_name == 'push' || inputs.env == 'dev'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy conversation-chat to dev
+        run: railway up --service conversation-chat --environment dev --detach
+
+      - name: Smoke /api/v1/health
+        if: vars.RAILWAY_DEV_CHAT_URL != ''
+        run: |
+          curl --fail --retry 30 --retry-delay 10 --retry-all-errors -sS \
+               -o /dev/null -w "%{http_code}\n" \
+               "${{ vars.RAILWAY_DEV_CHAT_URL }}/api/v1/health"
+
+  deploy-prod:
+    name: Railway / prod
+    if: github.event_name == 'workflow_dispatch' && inputs.env == 'prod'
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy conversation-chat to prod
+        run: railway up --service conversation-chat --environment Production --detach
+
+      - name: Smoke /api/v1/health
+        if: vars.RAILWAY_PROD_CHAT_URL != ''
+        run: |
+          curl --fail --retry 30 --retry-delay 10 --retry-all-errors -sS \
+               -o /dev/null -w "%{http_code}\n" \
+               "${{ vars.RAILWAY_PROD_CHAT_URL }}/api/v1/health"
