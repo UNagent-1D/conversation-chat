@@ -16,6 +16,7 @@ const (
 	keyState    = "state:%s"
 	keyOpQueue  = "op_queue:%s"
 	keyEscTTL   = "esc_ttl:%s"
+	keyOutbound = "outbound:%s"
 	keyEvents   = "events:stats"
 )
 
@@ -125,6 +126,48 @@ func (r *RedisRepo) AddToOpQueue(ctx context.Context, tenantID, sessionID string
 // RemoveFromOpQueue removes a session from the operator queue.
 func (r *RedisRepo) RemoveFromOpQueue(ctx context.Context, tenantID, sessionID string) error {
 	return r.client.ZRem(ctx, fmt.Sprintf(keyOpQueue, tenantID), sessionID).Err()
+}
+
+// ListOpQueue returns the operator queue for a tenant, oldest first. Each
+// entry's Score is the Unix timestamp the session was enqueued.
+func (r *RedisRepo) ListOpQueue(ctx context.Context, tenantID string) ([]redis.Z, error) {
+	return r.client.ZRangeWithScores(ctx, fmt.Sprintf(keyOpQueue, tenantID), 0, -1).Result()
+}
+
+// --- Operator outbound messages ---
+
+// PushOutbound queues an operator message for delivery to the session's end
+// user. The channel adapter (chat-orch's Telegram loop) drains this list.
+func (r *RedisRepo) PushOutbound(ctx context.Context, sessionID, text string, ttl time.Duration) error {
+	key := fmt.Sprintf(keyOutbound, sessionID)
+	pipe := r.client.Pipeline()
+	pipe.RPush(ctx, key, text)
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// DrainOutbound returns and clears the queued outbound messages for each
+// given session. Sessions with nothing pending are omitted from the result.
+// The read-and-clear is atomic per session (MULTI/EXEC).
+func (r *RedisRepo) DrainOutbound(ctx context.Context, sessionIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string)
+	for _, sid := range sessionIDs {
+		key := fmt.Sprintf(keyOutbound, sid)
+		var rangeCmd *redis.StringSliceCmd
+		_, err := r.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			rangeCmd = pipe.LRange(ctx, key, 0, -1)
+			pipe.Del(ctx, key)
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("drain outbound %s: %w", sid, err)
+		}
+		if msgs := rangeCmd.Val(); len(msgs) > 0 {
+			out[sid] = msgs
+		}
+	}
+	return out, nil
 }
 
 // SetEscalationTTL sets a key that expires after operator_ttl_seconds.

@@ -155,8 +155,9 @@ func (w *Worker) handleDelivery(ctx context.Context, ch *amqp.Channel, d amqp.De
 			slog.String("job_id", job.JobID),
 			slog.String("error", err.Error()),
 		)
-		// Publish an empty result so chat-orch's long-poll isn't left hanging
-		resultText = ""
+		// Publish a real, user-facing message instead of an empty string so
+		// the Telegram side never has to send a bare placeholder.
+		resultText = "Lo siento, tuve un problema procesando tu mensaje. Por favor intenta de nuevo."
 	} else {
 		resultText = resp.Message.Text
 	}
