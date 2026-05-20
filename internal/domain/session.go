@@ -43,13 +43,13 @@ type EndUser struct {
 
 // AgentRuntime — layer 3: active LLM config from ACR.
 type AgentRuntime struct {
-	AgentConfigID      string                    `json:"agent_config_id"      bson:"agent_config_id"`
-	Model              string                    `json:"model"                bson:"model"`
-	Temperature        float64                   `json:"temperature"          bson:"temperature"`
-	MaxTokens          int                       `json:"max_tokens"           bson:"max_tokens"`
-	SystemPrompt       string                    `json:"system_prompt"        bson:"system_prompt"`
-	ToolPermissions    []ToolPermission          `json:"tool_permissions"     bson:"tool_permissions"`
-	ChannelFormatRules map[string]ChannelFormat  `json:"channel_format_rules" bson:"channel_format_rules"`
+	AgentConfigID      string                   `json:"agent_config_id"      bson:"agent_config_id"`
+	Model              string                   `json:"model"                bson:"model"`
+	Temperature        float64                  `json:"temperature"          bson:"temperature"`
+	MaxTokens          int                      `json:"max_tokens"           bson:"max_tokens"`
+	SystemPrompt       string                   `json:"system_prompt"        bson:"system_prompt"`
+	ToolPermissions    []ToolPermission         `json:"tool_permissions"     bson:"tool_permissions"`
+	ChannelFormatRules map[string]ChannelFormat `json:"channel_format_rules" bson:"channel_format_rules"`
 }
 
 // ToolPermission is a single tool the agent is allowed to invoke.
@@ -66,12 +66,12 @@ type ChannelFormat struct {
 
 // TenantPolicy — layer 4: business rules and data source routing from Tenant Service.
 type TenantPolicy struct {
-	TenantID           string                  `json:"tenant_id"           bson:"tenant_id"`
-	Plan               string                  `json:"plan"                bson:"plan"`
-	AllowedSpecialties []string                `json:"allowed_specialties" bson:"allowed_specialties"`
-	AllowedLocations   []string                `json:"allowed_locations"   bson:"allowed_locations"`
-	EscalationRules    EscalationRules         `json:"escalation_rules"    bson:"escalation_rules"`
-	RouteConfigs       map[string]RouteConfig  `json:"route_configs"       bson:"route_configs"`
+	TenantID           string                 `json:"tenant_id"           bson:"tenant_id"`
+	Plan               string                 `json:"plan"                bson:"plan"`
+	AllowedSpecialties []string               `json:"allowed_specialties" bson:"allowed_specialties"`
+	AllowedLocations   []string               `json:"allowed_locations"   bson:"allowed_locations"`
+	EscalationRules    EscalationRules        `json:"escalation_rules"    bson:"escalation_rules"`
+	RouteConfigs       map[string]RouteConfig `json:"route_configs"       bson:"route_configs"`
 }
 
 // EscalationRules defines when and how to escalate to a human operator.
@@ -105,18 +105,18 @@ type EscalationEntry struct {
 
 // SessionRecord is the MongoDB document for a single conversation session.
 type SessionRecord struct {
-	ID             string            `bson:"_id"`
-	TenantID       string            `bson:"tenant_id"`
-	TenantSlug     string            `bson:"tenant_slug"`
-	AgentProfileID string            `bson:"agent_profile_id"`
-	AgentConfigID  string            `bson:"agent_config_id"`
-	EndUserID      string            `bson:"end_user_id"`
-	ChannelType    string            `bson:"channel_type"`
-	ChannelKey     string            `bson:"channel_key"`
-	State          SessionState      `bson:"state"`
-	ContextEnvelope ContextEnvelope  `bson:"context_envelope"`
-	Turns          []Turn            `bson:"turns"`
-	EscalationLog  []EscalationEntry `bson:"escalation_log"`
-	OpenedAt       time.Time         `bson:"opened_at"`
-	ClosedAt       *time.Time        `bson:"closed_at"`
+	ID              string            `bson:"_id"`
+	TenantID        string            `bson:"tenant_id"`
+	TenantSlug      string            `bson:"tenant_slug"`
+	AgentProfileID  string            `bson:"agent_profile_id"`
+	AgentConfigID   string            `bson:"agent_config_id"`
+	EndUserID       string            `bson:"end_user_id"`
+	ChannelType     string            `bson:"channel_type"`
+	ChannelKey      string            `bson:"channel_key"`
+	State           SessionState      `bson:"state"`
+	ContextEnvelope ContextEnvelope   `bson:"context_envelope"`
+	Turns           []Turn            `bson:"turns"`
+	EscalationLog   []EscalationEntry `bson:"escalation_log"`
+	OpenedAt        time.Time         `bson:"opened_at"`
+	ClosedAt        *time.Time        `bson:"closed_at"`
 }

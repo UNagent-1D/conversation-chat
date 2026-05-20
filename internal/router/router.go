@@ -11,9 +11,9 @@ import (
 
 // Handlers groups all HTTP handler instances.
 type Handlers struct {
-	Health      *handler.HealthHandler
-	Entrypoint  *handler.EntrypointHandler
-	Chat        *handler.ChatHandler
+	Health     *handler.HealthHandler
+	Entrypoint *handler.EntrypointHandler
+	Chat       *handler.ChatHandler
 }
 
 // New creates the Gin engine with all routes and middleware configured.

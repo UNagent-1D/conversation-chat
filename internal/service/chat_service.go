@@ -95,7 +95,9 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 			MessageID:  req.MessageID,
 			Ts:         time.Now().UTC(),
 		}, ttl)
-		return &TurnResponse{SessionID: sessionID, Message: struct{ Text string `json:"text"` }{"Un operador está atendiendo tu solicitud. Por favor espera."}}, nil
+		return &TurnResponse{SessionID: sessionID, Message: struct {
+			Text string `json:"text"`
+		}{"Un operador está atendiendo tu solicitud. Por favor espera."}}, nil
 	case domain.StateEscalationPending:
 		// Check if TTL expired (no operator claimed within the window)
 		active, _ := s.redis.EscalationTTLActive(ctx, sessionID)
@@ -105,9 +107,13 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 			s.handleEscalationTTLExpiry(ctx, env, sessionID)
 			farewellTurn := domain.Turn{Role: domain.RoleAssistant, Content: noOperatorMsg, Ts: time.Now().UTC()}
 			s.appendAndFlush(ctx, env, sessionID, farewellTurn, 60*time.Second)
-			return &TurnResponse{SessionID: sessionID, Message: struct{ Text string `json:"text"` }{noOperatorMsg}}, nil
+			return &TurnResponse{SessionID: sessionID, Message: struct {
+				Text string `json:"text"`
+			}{noOperatorMsg}}, nil
 		}
-		return &TurnResponse{SessionID: sessionID, Message: struct{ Text string `json:"text"` }{"Estamos conectándote con un operador. Por favor espera."}}, nil
+		return &TurnResponse{SessionID: sessionID, Message: struct {
+			Text string `json:"text"`
+		}{"Estamos conectándote con un operador. Por favor espera."}}, nil
 	}
 
 	// 4. Append new user turn to in-memory history
@@ -128,7 +134,9 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 
 	return &TurnResponse{
 		SessionID: sessionID,
-		Message:   struct{ Text string `json:"text"` }{assistantText},
+		Message: struct {
+			Text string `json:"text"`
+		}{assistantText},
 	}, nil
 }
 

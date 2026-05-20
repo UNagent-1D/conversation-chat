@@ -32,8 +32,8 @@ type ToolDef struct {
 
 // CompletionResponse holds the parsed structured output from the LLM.
 type CompletionResponse struct {
-	Response    domain.LLMResponse
-	RawContent  string // raw JSON string returned by the model (for logging)
-	InputTokens int
+	Response     domain.LLMResponse
+	RawContent   string // raw JSON string returned by the model (for logging)
+	InputTokens  int
 	OutputTokens int
 }

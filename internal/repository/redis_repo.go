@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	keyCtx      = "ctx:%s"
-	keyHist     = "hist:%s"
-	keyState    = "state:%s"
-	keyOpQueue  = "op_queue:%s"
-	keyEscTTL   = "esc_ttl:%s"
-	keyEvents   = "events:stats"
+	keyCtx     = "ctx:%s"
+	keyHist    = "hist:%s"
+	keyState   = "state:%s"
+	keyOpQueue = "op_queue:%s"
+	keyEscTTL  = "esc_ttl:%s"
+	keyEvents  = "events:stats"
 )
 
 // RedisRepo handles all Redis operations for session state management.

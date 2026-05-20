@@ -10,24 +10,24 @@ import (
 )
 
 type Config struct {
-	ServerPort               string
-	AppVersion               string
-	GinMode                  string
-	RedisURL                 string
-	MongoURI                 string
-	MongoDB                  string
-	ACRServiceURL            string
-	TenantServiceURL         string
-	AuthServiceURL           string
-	OpenAIAPIKey             string
-	OpenAIBaseURL            string
+	ServerPort                string
+	AppVersion                string
+	GinMode                   string
+	RedisURL                  string
+	MongoURI                  string
+	MongoDB                   string
+	ACRServiceURL             string
+	TenantServiceURL          string
+	AuthServiceURL            string
+	OpenAIAPIKey              string
+	OpenAIBaseURL             string
 	DefaultIdleTimeoutSeconds int
-	AuthStub                 bool
-	AuthStubClaims           StubClaims
-	RabbitmqURL              string
-	LLMCircuitBreaker        LLMCircuitBreakerConfig
-	BackendChannelKey        string
-	BackendChannelEnabled    bool
+	AuthStub                  bool
+	AuthStubClaims            StubClaims
+	RabbitmqURL               string
+	LLMCircuitBreaker         LLMCircuitBreakerConfig
+	BackendChannelKey         string
+	BackendChannelEnabled     bool
 }
 
 type StubClaims struct {
@@ -68,22 +68,22 @@ func Load() *Config {
 	}
 
 	return &Config{
-		ServerPort:               getEnv("SERVER_PORT", "8082"),
-		AppVersion:               getEnv("APP_VERSION", "1.0.0"),
-		GinMode:                  getEnv("GIN_MODE", "debug"),
-		RedisURL:                 getEnv("REDIS_URL", "redis://localhost:6379/0"),
-		MongoURI:                 getEnv("MONGO_URI", "mongodb://localhost:27017"),
-		MongoDB:                  getEnv("MONGO_DB", "conversatory"),
-		ACRServiceURL:            getEnv("ACR_SERVICE_URL", "http://localhost:8081"),
-		TenantServiceURL:         getEnv("TENANT_SERVICE_URL", "http://localhost:8080"),
-		AuthServiceURL:           getEnv("AUTH_SERVICE_URL", "http://localhost:9090"),
-		OpenAIAPIKey:             requireEnv("OPENAI_API_KEY"),
-		OpenAIBaseURL:            requireEnv("OPENAI_BASE_URL"),
+		ServerPort:                getEnv("SERVER_PORT", "8082"),
+		AppVersion:                getEnv("APP_VERSION", "1.0.0"),
+		GinMode:                   getEnv("GIN_MODE", "debug"),
+		RedisURL:                  getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		MongoURI:                  getEnv("MONGO_URI", "mongodb://localhost:27017"),
+		MongoDB:                   getEnv("MONGO_DB", "conversatory"),
+		ACRServiceURL:             getEnv("ACR_SERVICE_URL", "http://localhost:8081"),
+		TenantServiceURL:          getEnv("TENANT_SERVICE_URL", "http://localhost:8080"),
+		AuthServiceURL:            getEnv("AUTH_SERVICE_URL", "http://localhost:9090"),
+		OpenAIAPIKey:              requireEnv("OPENAI_API_KEY"),
+		OpenAIBaseURL:             requireEnv("OPENAI_BASE_URL"),
 		DefaultIdleTimeoutSeconds: getInt("DEFAULT_IDLE_TIMEOUT_SECONDS", 300),
-		AuthStub:              getBool("AUTH_STUB", false),
-		RabbitmqURL:           getEnv("RABBITMQ_URL", ""),
-		BackendChannelKey:     getEnv("BACKEND_CHANNEL_KEY", ""),
-		BackendChannelEnabled: getBool("BACKEND_CHANNEL_ENABLED", false),
+		AuthStub:                  getBool("AUTH_STUB", false),
+		RabbitmqURL:               getEnv("RABBITMQ_URL", ""),
+		BackendChannelKey:         getEnv("BACKEND_CHANNEL_KEY", ""),
+		BackendChannelEnabled:     getBool("BACKEND_CHANNEL_ENABLED", false),
 		LLMCircuitBreaker: LLMCircuitBreakerConfig{
 			// See LLMCircuitBreakerConfig doc for why these defaults are wide.
 			FailureThreshold:    getInt("LLM_CB_FAILURE_THRESHOLD", 5),
