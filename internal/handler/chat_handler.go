@@ -129,3 +129,70 @@ func (h *ChatHandler) OperatorResolve(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"session_id": sessionID, "resolve_action": body.ResolveAction})
 }
+
+// ListEscalations handles GET /api/v1/escalations.
+// Returns the sessions waiting for an operator, for the operator console.
+func (h *ChatHandler) ListEscalations(c *gin.Context) {
+	// Prefer an explicit tenant_id query param; fall back to the token claim.
+	tenantID := c.Query("tenant_id")
+	if tenantID == "" {
+		tenantID = c.GetString(middleware.CtxKeyTenantID)
+	}
+	if tenantID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required (query param or token)"})
+		return
+	}
+
+	items, err := h.svc.ListEscalations(c.Request.Context(), tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":      err.Error(),
+			"request_id": c.GetString(middleware.CtxKeyRequestID),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"escalations": items})
+}
+
+// OperatorMessage handles POST /api/v1/sessions/:sid/operator-message.
+// Body: { "text": "..." } — an operator's reply to the end user.
+func (h *ChatHandler) OperatorMessage(c *gin.Context) {
+	sessionID := c.Param("sid")
+
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.svc.OperatorMessage(c.Request.Context(), sessionID, body.Text); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"session_id": sessionID, "delivered": true})
+}
+
+// DrainOutbound handles POST /api/v1/outbound/drain.
+// Internal: chat-orch's Telegram loop fetches operator messages to deliver.
+// Body: { "session_ids": [...] }
+func (h *ChatHandler) DrainOutbound(c *gin.Context) {
+	var body struct {
+		SessionIDs []string `json:"session_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	msgs, err := h.svc.DrainOutbound(c.Request.Context(), body.SessionIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"messages": msgs})
+}

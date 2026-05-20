@@ -2,12 +2,34 @@ package router
 
 import (
 	"log/slog"
+	"net/http"
 
 	"github.com/UNagent-1D/conversation-chat/internal/channel"
 	"github.com/UNagent-1D/conversation-chat/internal/handler"
 	"github.com/UNagent-1D/conversation-chat/internal/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+// corsMiddleware lets the browser-based operator console call this service
+// directly. The frontend is a different origin (port 3000), so credentialed
+// cross-origin requests need these headers and an OPTIONS preflight reply.
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Request-Id")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
 
 // Handlers groups all HTTP handler instances.
 type Handlers struct {
@@ -22,6 +44,7 @@ func New(ginMode string, authCfg middleware.AuthConfig, logger *slog.Logger, h H
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(corsMiddleware())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(logger))
 
@@ -31,6 +54,11 @@ func New(ginMode string, authCfg middleware.AuthConfig, logger *slog.Logger, h H
 	// Health probes don't share the channel key, so the secure-channel
 	// middleware must be mounted on the auth group only.
 	api.GET("/health", h.Health.Check)
+
+	// ── Operator outbound drain (internal, plaintext) ────────────────────────
+	// chat-orch's Telegram loop polls this to deliver operator messages to the
+	// end user. Internal Docker network only — no auth, no secure channel.
+	api.POST("/outbound/drain", h.Chat.DrainOutbound)
 
 	// ── Authenticated routes ─────────────────────────────────────────────────
 	// Secure channel decrypts the body before auth so the bearer/claims are
@@ -82,6 +110,18 @@ func New(ginMode string, authCfg middleware.AuthConfig, logger *slog.Logger, h H
 	auth.POST("/sessions/:sid/operator-resolve",
 		middleware.RequireRole("tenant_operator", "tenant_admin", "app_admin"),
 		h.Chat.OperatorResolve,
+	)
+
+	// ── Operator console ─────────────────────────────────────────────────────
+	// GET  /escalations                     → sessions waiting for an operator
+	// POST /sessions/:sid/operator-message   → operator reply to the end user
+	auth.GET("/escalations",
+		middleware.RequireRole("tenant_operator", "tenant_admin", "app_admin"),
+		h.Chat.ListEscalations,
+	)
+	auth.POST("/sessions/:sid/operator-message",
+		middleware.RequireRole("tenant_operator", "tenant_admin", "app_admin"),
+		h.Chat.OperatorMessage,
 	)
 
 	return r

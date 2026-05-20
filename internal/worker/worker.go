@@ -16,8 +16,11 @@ import (
 const (
 	queueRequests = "chat_requests"
 	queueResults  = "chat_results"
-	maxRetries    = 5
-	retryDelay    = 2 * time.Second
+	// RabbitMQ can take a while to accept connections after its container
+	// reports healthy; retry for ~60s before giving up so the worker
+	// survives a cold start of the stack.
+	maxRetries = 30
+	retryDelay = 2 * time.Second
 )
 
 // ChatJob is the message consumed from chat_requests.
@@ -155,8 +158,9 @@ func (w *Worker) handleDelivery(ctx context.Context, ch *amqp.Channel, d amqp.De
 			slog.String("job_id", job.JobID),
 			slog.String("error", err.Error()),
 		)
-		// Publish an empty result so chat-orch's long-poll isn't left hanging
-		resultText = ""
+		// Publish a real, user-facing message instead of an empty string so
+		// the Telegram side never has to send a bare placeholder.
+		resultText = "Lo siento, tuve un problema procesando tu mensaje. Por favor intenta de nuevo."
 	} else {
 		resultText = resp.Message.Text
 	}

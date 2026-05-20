@@ -32,6 +32,22 @@ type TurnResponse struct {
 	} `json:"message"`
 }
 
+// User-facing messages for sessions that can no longer run the bot loop.
+// They tell the user how to recover (the Telegram side handles /start).
+const (
+	sessionExpiredMsg = "Tu sesión expiró por inactividad. Envía /start para comenzar de nuevo."
+	sessionClosedMsg  = "Esta conversación finalizó. Envía /start para comenzar una nueva."
+	noOperatorMsg     = "Por ahora no hay un operador disponible. Puedes seguir conversando conmigo y con gusto te ayudo."
+)
+
+// textResponse builds a TurnResponse carrying a single text message.
+// An empty text is a valid, intentional "stay silent" response.
+func textResponse(sessionID, text string) *TurnResponse {
+	r := &TurnResponse{SessionID: sessionID}
+	r.Message.Text = text
+	return r
+}
+
 // ChatService owns the per-turn LLM loop, tool execution, and escalation state machine.
 type ChatService struct {
 	redis      *repository.RedisRepo
@@ -66,7 +82,9 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 		return nil, fmt.Errorf("load context: %w", err)
 	}
 	if env == nil {
-		return nil, fmt.Errorf("session not found or expired")
+		// The Redis context expired (idle timeout). Do not error — guide
+		// the user to /start so the Telegram side can open a fresh session.
+		return textResponse(sessionID, sessionExpiredMsg), nil
 	}
 
 	// 2. Load conversation history from Redis
@@ -85,9 +103,11 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 
 	switch state {
 	case domain.StateClosed:
-		return nil, fmt.Errorf("session is closed")
+		// Session is over. Guide the user to /start instead of erroring.
+		return textResponse(sessionID, sessionClosedMsg), nil
 	case domain.StateOperatorActive:
-		// Forward message to operator queue — operator handles response
+		// A human operator owns the conversation. Save the user's message
+		// so the operator sees it, and stay silent — the operator replies.
 		s.appendAndFlush(ctx, env, sessionID, domain.Turn{
 			Role:       domain.RoleUser,
 			Content:    req.UserMessage,
@@ -95,25 +115,30 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 			MessageID:  req.MessageID,
 			Ts:         time.Now().UTC(),
 		}, ttl)
-		return &TurnResponse{SessionID: sessionID, Message: struct {
-			Text string `json:"text"`
-		}{"Un operador está atendiendo tu solicitud. Por favor espera."}}, nil
+		return textResponse(sessionID, ""), nil
 	case domain.StateEscalationPending:
-		// Check if TTL expired (no operator claimed within the window)
+		// Save the user's message so an operator can read it on claim.
+		s.appendAndFlush(ctx, env, sessionID, domain.Turn{
+			Role:       domain.RoleUser,
+			Content:    req.UserMessage,
+			ChannelKey: req.ChannelKey,
+			MessageID:  req.MessageID,
+			Ts:         time.Now().UTC(),
+		}, ttl)
 		active, _ := s.redis.EscalationTTLActive(ctx, sessionID)
 		if !active {
-			// No operator responded in time — close session and notify user
-			const noOperatorMsg = "Gracias por contactarnos. En este momento no tenemos un operador disponible. Un agente se comunicará contigo en los próximos días."
-			s.handleEscalationTTLExpiry(ctx, env, sessionID)
-			farewellTurn := domain.Turn{Role: domain.RoleAssistant, Content: noOperatorMsg, Ts: time.Now().UTC()}
-			s.appendAndFlush(ctx, env, sessionID, farewellTurn, 60*time.Second)
-			return &TurnResponse{SessionID: sessionID, Message: struct {
-				Text string `json:"text"`
-			}{noOperatorMsg}}, nil
+			// No operator claimed the chat in time. Tell the user once,
+			// then hand the conversation back to the bot so it stays usable.
+			_ = s.redis.RemoveFromOpQueue(ctx, env.TenantPolicy.TenantID, sessionID)
+			_ = s.redis.SetState(ctx, sessionID, domain.StateBotActive, ttl)
+			s.appendAndFlush(ctx, env, sessionID, domain.Turn{
+				Role: domain.RoleAssistant, Content: noOperatorMsg, Ts: time.Now().UTC(),
+			}, ttl)
+			return textResponse(sessionID, noOperatorMsg), nil
 		}
-		return &TurnResponse{SessionID: sessionID, Message: struct {
-			Text string `json:"text"`
-		}{"Estamos conectándote con un operador. Por favor espera."}}, nil
+		// Operator handoff still pending: stay silent so the user is not
+		// spammed with the same "connecting you" notice on every message.
+		return textResponse(sessionID, ""), nil
 	}
 
 	// 4. Append new user turn to in-memory history
@@ -134,10 +159,17 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 
 	return &TurnResponse{
 		SessionID: sessionID,
-		Message: struct {
-			Text string `json:"text"`
-		}{assistantText},
+		Message:   struct{ Text string `json:"text"` }{assistantText},
 	}, nil
+}
+
+// isRateLimitError reports whether an LLM error is a provider rate-limit or
+// quota rejection (HTTP 429), rather than a real fault on our side.
+func isRateLimitError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "rate limit")
 }
 
 // runLLMLoop calls the LLM, handles tool calls (re-entering), and returns the final text.
@@ -151,6 +183,17 @@ func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelop
 				// Circuit is open — provider is unavailable, fail fast with a
 				// distinct message so the user knows to retry later.
 				return "El servicio de IA no está disponible en este momento. Por favor intenta en unos minutos.", nil
+			}
+			// Log the real cause; the user only sees a friendly message.
+			s.logger.Error("llm loop failed",
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()),
+				slog.String("raw", rawContent),
+			)
+			// A provider rate-limit / quota error is not a bug — say so
+			// honestly instead of a generic "something went wrong".
+			if isRateLimitError(err) {
+				return "El servicio de IA alcanzó su límite de uso por ahora. Por favor intenta más tarde.", nil
 			}
 			return "Lo siento, ocurrió un error. Por favor intenta de nuevo.", nil
 		}
@@ -358,15 +401,6 @@ func (s *ChatService) handleEscalation(ctx context.Context, env *domain.ContextE
 	}()
 }
 
-// handleEscalationTTLExpiry resolves an expired escalation according to ttl_fallback.
-// handleEscalationTTLExpiry always closes the session when no operator claims it in time.
-func (s *ChatService) handleEscalationTTLExpiry(ctx context.Context, env *domain.ContextEnvelope, sessionID string) {
-	_ = s.redis.RemoveFromOpQueue(ctx, env.TenantPolicy.TenantID, sessionID)
-	go func() {
-		_ = s.entrypoint.CloseSession(context.Background(), env.TenantPolicy.TenantID, sessionID)
-	}()
-}
-
 // OperatorAccept claims an escalation_pending session for the given operator.
 func (s *ChatService) OperatorAccept(ctx context.Context, tenantID, tenantSlug, sessionID, operatorID string) error {
 	state, err := s.redis.GetState(ctx, sessionID)
@@ -385,6 +419,9 @@ func (s *ChatService) OperatorAccept(ctx context.Context, tenantID, tenantSlug, 
 	ttl := time.Duration(env.SessionMeta.IdleTimeoutSeconds+60) * time.Second
 	_ = s.redis.SetState(ctx, sessionID, domain.StateOperatorActive, ttl)
 	_ = s.redis.RemoveFromOpQueue(ctx, tenantID, sessionID)
+
+	// Let the end user know a human has joined.
+	_ = s.redis.PushOutbound(ctx, sessionID, "Un operador se ha unido a la conversación.", ttl)
 
 	go func() {
 		_ = s.sessions.UpdateState(context.Background(), tenantSlug, sessionID, domain.StateOperatorActive)
@@ -413,12 +450,14 @@ func (s *ChatService) OperatorResolve(ctx context.Context, tenantID, tenantSlug,
 
 	switch resolveAction {
 	case "close":
+		_ = s.redis.PushOutbound(ctx, sessionID, "La conversación ha finalizado. Gracias por contactarnos.", ttl)
 		_ = s.redis.SetState(ctx, sessionID, domain.StateClosed, 60*time.Second)
 		go func() {
 			_ = s.entrypoint.CloseSession(context.Background(), tenantSlug, sessionID)
 			_ = s.sessions.UpdateEscalationOperator(context.Background(), tenantSlug, sessionID, operatorID, &now)
 		}()
 	case "bot_resume":
+		_ = s.redis.PushOutbound(ctx, sessionID, "Continuaremos con el asistente virtual. ¿En qué más puedo ayudarte?", ttl)
 		_ = s.redis.SetState(ctx, sessionID, domain.StateBotActive, ttl)
 		go func() {
 			_ = s.sessions.UpdateState(context.Background(), tenantSlug, sessionID, domain.StateBotActive)
@@ -431,10 +470,97 @@ func (s *ChatService) OperatorResolve(ctx context.Context, tenantID, tenantSlug,
 	return nil
 }
 
-// GetHistory returns all turns for a session from MongoDB.
+// EscalationSummary describes one session waiting for a human operator.
+type EscalationSummary struct {
+	SessionID    string `json:"session_id"`
+	WaitingSince int64  `json:"waiting_since"` // Unix seconds
+	Preview      string `json:"preview"`       // last user message
+	EndUser      string `json:"end_user"`      // name or cellphone, if known
+}
+
+// ListEscalations returns the sessions of a tenant that are waiting for an
+// operator to claim them, oldest first.
+func (s *ChatService) ListEscalations(ctx context.Context, tenantID string) ([]EscalationSummary, error) {
+	entries, err := s.redis.ListOpQueue(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list operator queue: %w", err)
+	}
+	summaries := make([]EscalationSummary, 0, len(entries))
+	for _, e := range entries {
+		sid, _ := e.Member.(string)
+		if sid == "" {
+			continue
+		}
+		// Skip sessions that are no longer genuinely pending (claimed,
+		// resumed, or closed since they were enqueued).
+		if state, _ := s.redis.GetState(ctx, sid); state != domain.StateEscalationPending {
+			continue
+		}
+		sum := EscalationSummary{SessionID: sid, WaitingSince: int64(e.Score)}
+		if env, _ := s.redis.GetContext(ctx, sid); env != nil {
+			sum.EndUser = env.EndUser.FullName
+			if sum.EndUser == "" {
+				sum.EndUser = env.EndUser.Cellphone
+			}
+		}
+		if hist, _ := s.redis.GetHistory(ctx, sid); len(hist) > 0 {
+			for i := len(hist) - 1; i >= 0; i-- {
+				if hist[i].Role == domain.RoleUser {
+					sum.Preview = hist[i].Content
+					break
+				}
+			}
+		}
+		summaries = append(summaries, sum)
+	}
+	return summaries, nil
+}
+
+// OperatorMessage delivers a human operator's message to the end user. It
+// records the message in history and queues it for the channel adapter.
+func (s *ChatService) OperatorMessage(ctx context.Context, sessionID, text string) error {
+	if text == "" {
+		return fmt.Errorf("message text is required")
+	}
+	state, err := s.redis.GetState(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("get state: %w", err)
+	}
+	if state != domain.StateOperatorActive {
+		return fmt.Errorf("session is not operator_active (current: %s)", state)
+	}
+	env, err := s.redis.GetContext(ctx, sessionID)
+	if err != nil || env == nil {
+		return fmt.Errorf("load context: %w", err)
+	}
+	ttl := time.Duration(env.SessionMeta.IdleTimeoutSeconds+60) * time.Second
+	s.appendAndFlush(ctx, env, sessionID, domain.Turn{
+		Role: domain.RoleAssistant, Content: text, Ts: time.Now().UTC(),
+	}, ttl)
+	return s.redis.PushOutbound(ctx, sessionID, text, ttl)
+}
+
+// DrainOutbound returns and clears the operator messages queued for delivery
+// on each of the given sessions. Called by chat-orch's Telegram loop.
+func (s *ChatService) DrainOutbound(ctx context.Context, sessionIDs []string) (map[string][]string, error) {
+	return s.redis.DrainOutbound(ctx, sessionIDs)
+}
+
+// GetHistory returns all turns for a session. It reads the live Redis
+// history first — that is the most up to date during an active operator
+// conversation and needs no tenant slug — and falls back to the persisted
+// copy in MongoDB.
 func (s *ChatService) GetHistory(ctx context.Context, tenantSlug, sessionID string) ([]domain.Turn, error) {
+	turns, redisErr := s.redis.GetHistory(ctx, sessionID)
+	if redisErr == nil && len(turns) > 0 {
+		return turns, nil
+	}
 	session, err := s.sessions.GetByID(ctx, tenantSlug, sessionID)
 	if err != nil || session == nil {
+		if redisErr == nil {
+			// No Mongo record but Redis answered (possibly empty) — not an error.
+			return turns, nil
+		}
 		return nil, fmt.Errorf("session not found")
 	}
 	return session.Turns, nil
