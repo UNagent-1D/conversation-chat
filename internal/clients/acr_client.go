@@ -12,15 +12,15 @@ import (
 
 // ACRConfig is the response from GET /api/v1/tenants/:id/profiles/:pid/configs/active.
 type ACRConfig struct {
-	ID                 string                  `json:"id"`
-	Version            int                     `json:"version"`
-	Status             string                  `json:"status"`
-	ConversationPolicy json.RawMessage         `json:"conversation_policy"`
-	EscalationRules    json.RawMessage         `json:"escalation_rules"`
-	ToolPermissions    []domain.ToolPermission `json:"tool_permissions"`
-	LLMParams          LLMParams               `json:"llm_params"`
+	ID                 string                          `json:"id"`
+	Version            int                             `json:"version"`
+	Status             string                          `json:"status"`
+	ConversationPolicy json.RawMessage                 `json:"conversation_policy"`
+	EscalationRules    json.RawMessage                 `json:"escalation_rules"`
+	ToolPermissions    []domain.ToolPermission         `json:"tool_permissions"`
+	LLMParams          LLMParams                       `json:"llm_params"`
 	ChannelFormatRules map[string]domain.ChannelFormat `json:"channel_format_rules"`
-	ActivatedAt        string                  `json:"activated_at"`
+	ActivatedAt        string                          `json:"activated_at"`
 }
 
 // LLMParams holds the model-level parameters from the ACR active config.

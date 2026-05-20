@@ -20,7 +20,7 @@ import (
 type Request struct {
 	Method  string
 	URL     string
-	Body    any            // serialised + sealed when non-nil and Active()
+	Body    any // serialised + sealed when non-nil and Active()
 	Headers map[string]string
 }
 

@@ -85,12 +85,12 @@ type CircuitBreakerClient struct {
 	cfg    CircuitBreakerConfig
 	logger *slog.Logger
 
-	mu                 sync.Mutex
-	state              cbState
+	mu                  sync.Mutex
+	state               cbState
 	consecutiveFailures int
-	halfOpenRequests   int
-	lastFailureTime    time.Time
-	openedAt           time.Time
+	halfOpenRequests    int
+	lastFailureTime     time.Time
+	openedAt            time.Time
 }
 
 // NewCircuitBreakerClient wraps inner with a circuit breaker configured by cfg.

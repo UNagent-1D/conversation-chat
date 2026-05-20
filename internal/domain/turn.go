@@ -28,7 +28,7 @@ type Turn struct {
 // LLMResponse is the enforced structured output from every LLM call.
 // action is the fast-parse signal; message carries the full detail.
 type LLMResponse struct {
-	Action  string      `json:"action"`  // none | tool_call | escalate | close_session
+	Action  string      `json:"action"` // none | tool_call | escalate | close_session
 	Message MessageBody `json:"message"`
 }
 

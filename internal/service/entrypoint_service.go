@@ -13,17 +13,17 @@ import (
 
 // OpenSessionRequest is the normalized body the Orchestrator sends to POST /sessions.
 type OpenSessionRequest struct {
-	Channel        string        `json:"channel"`
-	ChannelKey     string        `json:"channel_key"`
-	MessageID      string        `json:"message_id"`
-	From           string        `json:"from"`
-	Text           string        `json:"text"`
-	MessageType    string        `json:"message_type"`
-	Timestamp      time.Time     `json:"timestamp"`
-	TenantID       string        `json:"tenant_id"`
-	TenantSlug     string        `json:"tenant_slug"`
-	AgentProfileID string        `json:"agent_profile_id"`
-	EndUser        EndUserInput  `json:"end_user"`
+	Channel        string       `json:"channel"`
+	ChannelKey     string       `json:"channel_key"`
+	MessageID      string       `json:"message_id"`
+	From           string       `json:"from"`
+	Text           string       `json:"text"`
+	MessageType    string       `json:"message_type"`
+	Timestamp      time.Time    `json:"timestamp"`
+	TenantID       string       `json:"tenant_id"`
+	TenantSlug     string       `json:"tenant_slug"`
+	AgentProfileID string       `json:"agent_profile_id"`
+	EndUser        EndUserInput `json:"end_user"`
 }
 
 // EndUserInput is the end-user data pre-resolved by the Orchestrator.
@@ -43,10 +43,10 @@ type OpenSessionResult struct {
 
 // EntrypointService owns session creation and lifecycle management.
 type EntrypointService struct {
-	redis      *repository.RedisRepo
-	sessions   *repository.SessionRepo
-	acrClient  *clients.ACRClient
-	tenantClient *clients.TenantClient
+	redis              *repository.RedisRepo
+	sessions           *repository.SessionRepo
+	acrClient          *clients.ACRClient
+	tenantClient       *clients.TenantClient
 	defaultIdleTimeout int
 }
 
@@ -118,7 +118,7 @@ func (s *EntrypointService) CreateSession(ctx context.Context, req OpenSessionRe
 			WelcomeMessage:     "Hola, ¿cómo puedo ayudarle hoy?",
 			SessionStart:       time.Now().UTC(),
 		},
-		EndUser: s.buildEndUser(req.EndUser, req.From),
+		EndUser:      s.buildEndUser(req.EndUser, req.From),
 		AgentRuntime: acrCfg.ToAgentRuntime(),
 		TenantPolicy: domain.TenantPolicy{
 			TenantID:           req.TenantID,
