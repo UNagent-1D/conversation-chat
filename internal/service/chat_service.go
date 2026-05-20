@@ -163,6 +163,15 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 	}, nil
 }
 
+// isRateLimitError reports whether an LLM error is a provider rate-limit or
+// quota rejection (HTTP 429), rather than a real fault on our side.
+func isRateLimitError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "rate limit")
+}
+
 // runLLMLoop calls the LLM, handles tool calls (re-entering), and returns the final text.
 func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelope, sessionID string, history []domain.Turn, ttl time.Duration) (string, error) {
 	const maxToolIterations = 5
@@ -174,6 +183,17 @@ func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelop
 				// Circuit is open — provider is unavailable, fail fast with a
 				// distinct message so the user knows to retry later.
 				return "El servicio de IA no está disponible en este momento. Por favor intenta en unos minutos.", nil
+			}
+			// Log the real cause; the user only sees a friendly message.
+			s.logger.Error("llm loop failed",
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()),
+				slog.String("raw", rawContent),
+			)
+			// A provider rate-limit / quota error is not a bug — say so
+			// honestly instead of a generic "something went wrong".
+			if isRateLimitError(err) {
+				return "El servicio de IA alcanzó su límite de uso por ahora. Por favor intenta más tarde.", nil
 			}
 			return "Lo siento, ocurrió un error. Por favor intenta de nuevo.", nil
 		}

@@ -16,8 +16,11 @@ import (
 const (
 	queueRequests = "chat_requests"
 	queueResults  = "chat_results"
-	maxRetries    = 5
-	retryDelay    = 2 * time.Second
+	// RabbitMQ can take a while to accept connections after its container
+	// reports healthy; retry for ~60s before giving up so the worker
+	// survives a cold start of the stack.
+	maxRetries = 30
+	retryDelay = 2 * time.Second
 )
 
 // ChatJob is the message consumed from chat_requests.
