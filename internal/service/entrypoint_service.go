@@ -28,11 +28,12 @@ type OpenSessionRequest struct {
 
 // EndUserInput is the end-user data pre-resolved by the Orchestrator.
 type EndUserInput struct {
-	Exists      bool   `json:"exists"`
-	ID          string `json:"id"`
-	FullName    string `json:"full_name"`
-	Cellphone   string `json:"cellphone"`
-	ExternalRef string `json:"external_ref"`
+	Exists       bool   `json:"exists"`
+	ID           string `json:"id"`
+	FullName     string `json:"full_name"`
+	Cellphone    string `json:"cellphone"`
+	ExternalRef  string `json:"external_ref"`
+	ContactEmail string `json:"contact_email"`
 }
 
 // OpenSessionResult is returned by CreateSession.
@@ -217,10 +218,17 @@ func (s *EntrypointService) CloseSession(ctx context.Context, tenantSlug, sessio
 }
 
 // buildEndUser constructs the EndUser domain object from Orchestrator inputs.
+//
+// ContactEmail is plumbed in both branches: an OTP-verified user lands
+// here with Exists=true and an email; the legacy "no profile" path may
+// still carry an email (e.g. tenant-stub call without full identity).
+// Either way we keep the email on the session so post-tool hooks can use
+// it without an extra lookup.
 func (s *EntrypointService) buildEndUser(input EndUserInput, from string) domain.EndUser {
 	if !input.Exists {
 		return domain.EndUser{
 			Cellphone:       from,
+			ContactEmail:    input.ContactEmail,
 			IsAuthenticated: false,
 		}
 	}
@@ -229,6 +237,7 @@ func (s *EntrypointService) buildEndUser(input EndUserInput, from string) domain
 		FullName:        input.FullName,
 		Cellphone:       input.Cellphone,
 		ExternalRef:     input.ExternalRef,
+		ContactEmail:    input.ContactEmail,
 		IsAuthenticated: true,
 	}
 }

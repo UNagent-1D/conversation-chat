@@ -33,11 +33,17 @@ type SessionMeta struct {
 }
 
 // EndUser — layer 2: resolved patient identity from Tenant Service.
+//
+// ContactEmail is populated by chat-orch after a successful OTP verify on
+// the Telegram channel; conversation-chat uses it to fire booking
+// confirmation emails. Empty string when unknown — downstream code must
+// treat that as "skip email step", not as an error.
 type EndUser struct {
 	ID              string `json:"id"               bson:"id"`
 	FullName        string `json:"full_name"        bson:"full_name"`
 	Cellphone       string `json:"cellphone"        bson:"cellphone"`
 	ExternalRef     string `json:"external_ref"     bson:"external_ref"`
+	ContactEmail    string `json:"contact_email"    bson:"contact_email"`
 	IsAuthenticated bool   `json:"is_authenticated" bson:"is_authenticated"`
 }
 

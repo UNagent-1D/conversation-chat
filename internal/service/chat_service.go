@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -141,7 +143,12 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 		return textResponse(sessionID, ""), nil
 	}
 
-	// 4. Append new user turn to in-memory history
+	// 4. Append new user turn to in-memory history AND persist it so the
+	// next turn's GetHistory call sees it. Without the flush, only
+	// assistant turns landed in Redis and the LLM saw a wall of its own
+	// "give me X" replies with no user input between them — leading to an
+	// infinite loop where the model keeps asking for info the user
+	// already provided in the previous turn.
 	userTurn := domain.Turn{
 		Role:       domain.RoleUser,
 		Content:    req.UserMessage,
@@ -150,6 +157,7 @@ func (s *ChatService) ProcessTurn(ctx context.Context, sessionID string, req Tur
 		Ts:         time.Now().UTC(),
 	}
 	history = append(history, userTurn)
+	s.appendAndFlush(ctx, env, sessionID, userTurn, ttl)
 
 	// 5. Run the LLM loop (may iterate for tool calls)
 	assistantText, err := s.runLLMLoop(ctx, env, sessionID, history, ttl)
@@ -248,6 +256,28 @@ func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelop
 
 		case "escalate":
 			text := s.applyFormatRules(llmResp.Message.Text, env)
+			// Guardrail: only trust the LLM's escalate verdict when the
+			// user actually asked for a human. Weaker models reach for
+			// reason="ask_for_human" as a generic "I'm unsure" fallback,
+			// which would silently lock the session in
+			// StateEscalationPending (ProcessTurn's escalation branch
+			// returns empty text on every subsequent turn). Demoting to
+			// action="none" keeps the conversation going while still
+			// surfacing the (usually reasonable) clarifying text the
+			// LLM produced.
+			if !userExplicitlyAskedForHuman(history) {
+				reason := ""
+				if llmResp.Message.Escalation != nil {
+					reason = llmResp.Message.Escalation.Reason
+				}
+				s.logger.Info("downgraded false-positive escalate to none",
+					slog.String("session_id", sessionID),
+					slog.String("reason", reason),
+				)
+				assistantTurn := domain.Turn{Role: domain.RoleAssistant, Content: text, Ts: time.Now().UTC()}
+				s.appendAndFlush(ctx, env, sessionID, assistantTurn, ttl)
+				return text, nil
+			}
 			s.handleEscalation(ctx, env, sessionID, llmResp.Message.Escalation, ttl)
 			assistantTurn := domain.Turn{Role: domain.RoleAssistant, Content: text, Ts: time.Now().UTC()}
 			s.appendAndFlush(ctx, env, sessionID, assistantTurn, ttl)
@@ -260,12 +290,24 @@ func (s *ChatService) runLLMLoop(ctx context.Context, env *domain.ContextEnvelop
 
 // callLLM sends one completion request and validates the response. Retries once on parse error.
 func (s *ChatService) callLLM(ctx context.Context, env *domain.ContextEnvelope, history []domain.Turn) (domain.LLMResponse, string, error) {
+	// Pass the allowed tool names through so buildMessages can enumerate
+	// them in the system prompt. Without this the LLM only sees the
+	// "tool name from the allowed list" placeholder in the schema and
+	// hallucinates names like `schedule_appointment` instead of the real
+	// `book_appointment`, which trips the "tool not in allowed permissions"
+	// guard at line 300.
+	tools := make([]llm.ToolDef, 0, len(env.AgentRuntime.ToolPermissions))
+	for _, p := range env.AgentRuntime.ToolPermissions {
+		tools = append(tools, llm.ToolDef{Name: p.ToolName})
+	}
+
 	req := llm.CompletionRequest{
 		Model:        env.AgentRuntime.Model,
 		Temperature:  env.AgentRuntime.Temperature,
 		MaxTokens:    env.AgentRuntime.MaxTokens,
 		SystemPrompt: env.AgentRuntime.SystemPrompt,
 		Messages:     history,
+		Tools:        tools,
 	}
 
 	resp, err := s.llmClient.Complete(ctx, req)
@@ -371,7 +413,172 @@ func (s *ChatService) executeTool(ctx context.Context, env *domain.ContextEnvelo
 		return nil, fmt.Errorf("tool http request: %w", err)
 	}
 
+	// Side effect: notify the user by email whenever a session that has a
+	// captured contact_email (Telegram OTP path) completes a successful
+	// appointment mutation. Fire-and-forget so a slow / failing email step
+	// never blocks the LLM's reply. No-op for web sessions (no email).
+	if status >= 200 && status < 300 && env.EndUser.ContactEmail != "" {
+		switch tool.ToolName {
+		case "book_appointment", "reschedule_appointment", "cancel_appointment":
+			go s.sendAppointmentEmail(tool.ToolName, env.EndUser.ContactEmail, env.TenantPolicy.TenantID, body)
+		}
+	}
+
 	return json.RawMessage(body), nil
+}
+
+// sendAppointmentEmail fires a confirmation email for a book / reschedule /
+// cancel that just succeeded. Best-effort: any failure is logged and
+// dropped so the booking itself stays the source of truth. Runs in its
+// own goroutine with a fresh background context so the caller's request
+// lifetime doesn't cut the HTTP call short.
+//
+// hospital-mock returns three different shapes — book_appointment returns
+// the flat appointment object, reschedule wraps it in {"new_appointment"},
+// and cancel returns just {id,status,cancelled_at,reason}. We extract
+// what we can and fall back to friendly placeholders for missing fields.
+func (s *ChatService) sendAppointmentEmail(toolName, toAddr, tenantID string, toolResp []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Try a flat decode first (book + cancel). If reschedule wrapped the
+	// payload under "new_appointment", peel it and decode again.
+	var appt struct {
+		ID             string `json:"id"`
+		DoctorName     string `json:"doctor_name"`
+		Specialty      string `json:"specialty"`
+		SlotStart      string `json:"slot_start"`
+		Status         string `json:"status"`
+		Reason         string `json:"reason"`
+		CancelledAt    string `json:"cancelled_at"`
+		RescheduledFrom string `json:"rescheduled_from"`
+	}
+	_ = json.Unmarshal(toolResp, &appt)
+	if appt.ID == "" {
+		var wrapper struct {
+			RescheduledFrom string          `json:"rescheduled_from"`
+			NewAppointment  json.RawMessage `json:"new_appointment"`
+		}
+		if err := json.Unmarshal(toolResp, &wrapper); err == nil && len(wrapper.NewAppointment) > 0 {
+			_ = json.Unmarshal(wrapper.NewAppointment, &appt)
+			appt.RescheduledFrom = wrapper.RescheduledFrom
+		}
+	}
+
+	doctor := appt.DoctorName
+	if doctor == "" {
+		doctor = "tu doctor"
+	}
+	when := appt.SlotStart
+	if when == "" {
+		when = "el horario solicitado"
+	}
+	specialtySuffix := ""
+	if appt.Specialty != "" {
+		specialtySuffix = " (" + appt.Specialty + ")"
+	}
+
+	// Per-action subject + body. Each ends with a friendly closer so the
+	// user always sees a complete sentence even if some fields were empty.
+	var subject, textBody, category, idemKey string
+	switch toolName {
+	case "book_appointment":
+		subject = "Confirmación de cita — Clínica San Ignacio"
+		textBody = fmt.Sprintf(
+			"¡Hola!\n\nTu cita con %s%s ha sido confirmada para %s.\n\nReferencia: %s\n\nGracias por usar Clínica San Ignacio.",
+			doctor, specialtySuffix, when, appt.ID,
+		)
+		category = "appointment.confirmation"
+		idemKey = "book-" + appt.ID
+	case "reschedule_appointment":
+		subject = "Cita reagendada — Clínica San Ignacio"
+		textBody = fmt.Sprintf(
+			"¡Hola!\n\nTu cita ha sido reagendada con %s%s para el nuevo horario %s.\n\nReferencia anterior: %s\nNueva referencia: %s\n\nGracias por usar Clínica San Ignacio.",
+			doctor, specialtySuffix, when, appt.RescheduledFrom, appt.ID,
+		)
+		category = "appointment.reschedule"
+		// Two reschedules of the same source should both notify; key on
+		// the new appointment id rather than the source id.
+		idemKey = "rsch-" + appt.ID
+	case "cancel_appointment":
+		subject = "Cita cancelada — Clínica San Ignacio"
+		reasonSuffix := ""
+		if appt.Reason != "" && appt.Reason != "not specified" {
+			reasonSuffix = "\nMotivo: " + appt.Reason
+		}
+		textBody = fmt.Sprintf(
+			"¡Hola!\n\nTu cita ha sido cancelada.\n\nReferencia: %s%s\n\nSi necesitas agendar nuevamente, escríbenos cuando gustes. Gracias por usar Clínica San Ignacio.",
+			appt.ID, reasonSuffix,
+		)
+		category = "appointment.cancellation"
+		idemKey = "cncl-" + appt.ID
+	default:
+		// Shouldn't reach here — caller already filtered tool names.
+		return
+	}
+
+	// email-send validation requires EXACTLY ONE of html_body / text_body /
+	// template_id (any combination is rejected with 400). text_body keeps
+	// the demo simple; templates can come later.
+	payload := map[string]any{
+		"tenant_id":       tenantID,
+		"to":              []string{toAddr},
+		"subject":         subject,
+		"text_body":       textBody,
+		"category":        category,
+		"idempotency_key": idemKey,
+	}
+
+	// email-send is a Java service that doesn't speak the AES-256-GCM
+	// secure-channel envelope — we have to send plain JSON, not pipe
+	// through channel.Do. AUTH_STUB on email-send accepts any bearer.
+	jsonBody, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.emailSendURL()+"/api/v1/emails", strings.NewReader(string(jsonBody)))
+	if err != nil {
+		s.logger.Warn("appointment email: build request failed",
+			slog.String("tool", toolName),
+			slog.String("to", toAddr),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer internal")
+	httpResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.logger.Warn("appointment email failed",
+			slog.String("tool", toolName),
+			slog.String("to", toAddr),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	defer httpResp.Body.Close()
+	respBody, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		s.logger.Warn("appointment email non-2xx",
+			slog.String("tool", toolName),
+			slog.String("to", toAddr),
+			slog.Int("status", httpResp.StatusCode),
+			slog.String("body", string(respBody)),
+		)
+		return
+	}
+	s.logger.Info("appointment email sent",
+		slog.String("tool", toolName),
+		slog.String("to", toAddr),
+		slog.String("appointment_id", appt.ID),
+	)
+}
+
+// emailSendURL returns the configured email-send base URL. Falls back to
+// the docker-compose default so the hook works out of the box. Reading
+// env at call time keeps the ChatService constructor backwards-compatible.
+func (s *ChatService) emailSendURL() string {
+	if v := os.Getenv("EMAIL_SEND_URL"); v != "" {
+		return v
+	}
+	return "http://email-send:8080"
 }
 
 // handleEscalation transitions state to escalation_pending and notifies the operator queue.
@@ -605,6 +812,70 @@ func (s *ChatService) isToolAllowed(toolName string, permissions []domain.ToolPe
 		}
 	}
 	return false
+}
+
+// humanRequestMarkers is the substring set we accept as an explicit
+// "I want a human" signal. Used by the escalation guardrail to keep
+// weaker LLMs from auto-escalating clarifying questions. Substrings
+// only — no word boundaries — keeps the check robust to typos and
+// informal phrasing. Case-insensitive lookup happens in the caller
+// via strings.ToLower; accents are normalized too.
+var humanRequestMarkers = []string{
+	// Spanish — common phrasings.
+	"humano",
+	"operador",
+	"agente",
+	"persona real",
+	"asesor",
+	"representante",
+	"hablar con alguien",
+	"hablar con un humano",
+	"hablar con una persona",
+	"quiero hablar con",
+	"necesito hablar con",
+	// English — fallback for mixed-language users.
+	"human",
+	"agent",
+	"operator",
+	"real person",
+	"talk to a person",
+	"speak to a human",
+}
+
+// userExplicitlyAskedForHuman walks the history newest-first and
+// returns true if the most recent user turn contains any explicit
+// human-request marker. Other LLM tool calls / assistant turns in
+// between don't matter — we only care about what the human typed last.
+func userExplicitlyAskedForHuman(history []domain.Turn) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		t := history[i]
+		if t.Role != domain.RoleUser {
+			continue
+		}
+		s := normalizeForKeywordMatch(t.Content)
+		for _, m := range humanRequestMarkers {
+			if strings.Contains(s, m) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// normalizeForKeywordMatch lowercases and strips Spanish accents so a
+// user typing "operadór" or "OPERADOR" still matches. Tiny implementation
+// — the marker set is small and ASCII-only.
+func normalizeForKeywordMatch(s string) string {
+	s = strings.ToLower(s)
+	repl := [][2]string{
+		{"á", "a"}, {"é", "e"}, {"í", "i"}, {"ó", "o"}, {"ú", "u"},
+		{"ñ", "n"}, {"ü", "u"},
+	}
+	for _, r := range repl {
+		s = strings.ReplaceAll(s, r[0], r[1])
+	}
+	return s
 }
 
 // stripMarkdown removes basic markdown formatting (bold, italic, code, headers).
