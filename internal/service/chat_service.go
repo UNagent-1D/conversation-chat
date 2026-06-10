@@ -312,7 +312,20 @@ func (s *ChatService) callLLM(ctx context.Context, env *domain.ContextEnvelope, 
 
 	resp, err := s.llmClient.Complete(ctx, req)
 	if err != nil {
-		return domain.LLMResponse{}, "", fmt.Errorf("llm call: %w", err)
+		// One immediate retry on transient provider slips — deepseek
+		// occasionally returns an EMPTY completion (parse llm json:
+		// unexpected end of JSON input), which without this retry surfaced
+		// straight to the user as "ocurrió un error". Circuit-open is a
+		// deliberate fail-fast — don't retry against an open breaker.
+		if errors.Is(err, apperrors.ErrLLMCircuitOpen) {
+			return domain.LLMResponse{}, "", fmt.Errorf("llm call: %w", err)
+		}
+		s.logger.Warn("llm call failed, retrying once",
+			slog.String("error", err.Error()))
+		resp, err = s.llmClient.Complete(ctx, req)
+		if err != nil {
+			return domain.LLMResponse{}, "", fmt.Errorf("llm call: %w", err)
+		}
 	}
 
 	if err := resp.Response.Validate(); err != nil {
