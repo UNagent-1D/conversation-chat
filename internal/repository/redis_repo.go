@@ -62,6 +62,19 @@ func (r *RedisRepo) RefreshContextTTL(ctx context.Context, sessionID string, ttl
 	return r.client.Expire(ctx, fmt.Sprintf(keyCtx, sessionID), ttl).Err()
 }
 
+// TouchSession extends the TTL on every live key of a session (context,
+// state, history) without rewriting them. Used when an operator claims a
+// session: the conversation must survive far longer than the bot idle
+// timeout while a human is (slowly) handling it.
+func (r *RedisRepo) TouchSession(ctx context.Context, sessionID string, ttl time.Duration) error {
+	pipe := r.client.Pipeline()
+	pipe.Expire(ctx, fmt.Sprintf(keyCtx, sessionID), ttl)
+	pipe.Expire(ctx, fmt.Sprintf(keyState, sessionID), ttl)
+	pipe.Expire(ctx, fmt.Sprintf(keyHist, sessionID), ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 // --- History ---
 
 // AppendTurn appends a turn to the history list and refreshes the list TTL.

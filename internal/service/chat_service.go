@@ -621,7 +621,14 @@ func (s *ChatService) handleEscalation(ctx context.Context, env *domain.ContextE
 	}()
 }
 
+// operatorSessionTTL keeps a claimed session alive while a human handles it.
+// Humans are far slower than the bot idle timeout (~5 min); without this a
+// claimed-but-quiet conversation evaporated from Redis mid-handling.
+const operatorSessionTTL = 2 * time.Hour
+
 // OperatorAccept claims an escalation_pending session for the given operator.
+// The session STAYS in the operator queue (state operator_active) so the
+// panel can rediscover it after a reload; it leaves the queue on resolve.
 func (s *ChatService) OperatorAccept(ctx context.Context, tenantID, tenantSlug, sessionID, operatorID string) error {
 	state, err := s.redis.GetState(ctx, sessionID)
 	if err != nil {
@@ -636,12 +643,11 @@ func (s *ChatService) OperatorAccept(ctx context.Context, tenantID, tenantSlug, 
 		return fmt.Errorf("load context: %w", err)
 	}
 
-	ttl := time.Duration(env.SessionMeta.IdleTimeoutSeconds+60) * time.Second
-	_ = s.redis.SetState(ctx, sessionID, domain.StateOperatorActive, ttl)
-	_ = s.redis.RemoveFromOpQueue(ctx, tenantID, sessionID)
+	_ = s.redis.SetState(ctx, sessionID, domain.StateOperatorActive, operatorSessionTTL)
+	_ = s.redis.TouchSession(ctx, sessionID, operatorSessionTTL)
 
 	// Let the end user know a human has joined.
-	_ = s.redis.PushOutbound(ctx, sessionID, "Un operador se ha unido a la conversación.", ttl)
+	_ = s.redis.PushOutbound(ctx, sessionID, "Un operador se ha unido a la conversación.", operatorSessionTTL)
 
 	go func() {
 		_ = s.sessions.UpdateState(context.Background(), tenantSlug, sessionID, domain.StateOperatorActive)
@@ -672,6 +678,7 @@ func (s *ChatService) OperatorResolve(ctx context.Context, tenantID, tenantSlug,
 	case "close":
 		_ = s.redis.PushOutbound(ctx, sessionID, "La conversación ha finalizado. Gracias por contactarnos.", ttl)
 		_ = s.redis.SetState(ctx, sessionID, domain.StateClosed, 60*time.Second)
+		_ = s.redis.RemoveFromOpQueue(ctx, tenantID, sessionID)
 		go func() {
 			_ = s.entrypoint.CloseSession(context.Background(), tenantSlug, sessionID)
 			_ = s.sessions.UpdateEscalationOperator(context.Background(), tenantSlug, sessionID, operatorID, &now)
@@ -679,6 +686,7 @@ func (s *ChatService) OperatorResolve(ctx context.Context, tenantID, tenantSlug,
 	case "bot_resume":
 		_ = s.redis.PushOutbound(ctx, sessionID, "Continuaremos con el asistente virtual. ¿En qué más puedo ayudarte?", ttl)
 		_ = s.redis.SetState(ctx, sessionID, domain.StateBotActive, ttl)
+		_ = s.redis.RemoveFromOpQueue(ctx, tenantID, sessionID)
 		go func() {
 			_ = s.sessions.UpdateState(context.Background(), tenantSlug, sessionID, domain.StateBotActive)
 			_ = s.sessions.UpdateEscalationOperator(context.Background(), tenantSlug, sessionID, operatorID, &now)
@@ -690,16 +698,20 @@ func (s *ChatService) OperatorResolve(ctx context.Context, tenantID, tenantSlug,
 	return nil
 }
 
-// EscalationSummary describes one session waiting for a human operator.
+// EscalationSummary describes one session in the operator queue — either
+// still waiting (escalation_pending) or already claimed (operator_active).
 type EscalationSummary struct {
 	SessionID    string `json:"session_id"`
 	WaitingSince int64  `json:"waiting_since"` // Unix seconds
 	Preview      string `json:"preview"`       // last user message
 	EndUser      string `json:"end_user"`      // name or cellphone, if known
+	State        string `json:"state"`         // escalation_pending | operator_active
 }
 
-// ListEscalations returns the sessions of a tenant that are waiting for an
-// operator to claim them, oldest first.
+// ListEscalations returns the sessions of a tenant that need an operator,
+// oldest first: both unclaimed (escalation_pending) and claimed-but-open
+// (operator_active) — the latter so the Operator Panel can rediscover an
+// in-progress conversation after a page reload.
 func (s *ChatService) ListEscalations(ctx context.Context, tenantID string) ([]EscalationSummary, error) {
 	entries, err := s.redis.ListOpQueue(ctx, tenantID)
 	if err != nil {
@@ -711,12 +723,14 @@ func (s *ChatService) ListEscalations(ctx context.Context, tenantID string) ([]E
 		if sid == "" {
 			continue
 		}
-		// Skip sessions that are no longer genuinely pending (claimed,
-		// resumed, or closed since they were enqueued).
-		if state, _ := s.redis.GetState(ctx, sid); state != domain.StateEscalationPending {
+		// Garbage-collect entries whose sessions resumed, closed, or
+		// expired since they were enqueued.
+		state, _ := s.redis.GetState(ctx, sid)
+		if state != domain.StateEscalationPending && state != domain.StateOperatorActive {
+			_ = s.redis.RemoveFromOpQueue(ctx, tenantID, sid)
 			continue
 		}
-		sum := EscalationSummary{SessionID: sid, WaitingSince: int64(e.Score)}
+		sum := EscalationSummary{SessionID: sid, WaitingSince: int64(e.Score), State: string(state)}
 		if env, _ := s.redis.GetContext(ctx, sid); env != nil {
 			sum.EndUser = env.EndUser.FullName
 			if sum.EndUser == "" {
@@ -753,11 +767,12 @@ func (s *ChatService) OperatorMessage(ctx context.Context, sessionID, text strin
 	if err != nil || env == nil {
 		return fmt.Errorf("load context: %w", err)
 	}
-	ttl := time.Duration(env.SessionMeta.IdleTimeoutSeconds+60) * time.Second
+	// Human pace, not bot pace: keep the whole session alive while the
+	// operator is mid-conversation (see operatorSessionTTL).
 	s.appendAndFlush(ctx, env, sessionID, domain.Turn{
 		Role: domain.RoleAssistant, Content: text, Ts: time.Now().UTC(),
-	}, ttl)
-	return s.redis.PushOutbound(ctx, sessionID, text, ttl)
+	}, operatorSessionTTL)
+	return s.redis.PushOutbound(ctx, sessionID, text, operatorSessionTTL)
 }
 
 // DrainOutbound returns and clears the operator messages queued for delivery
